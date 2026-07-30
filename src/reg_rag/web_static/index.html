@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>银行监管可信知识助手</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">RG</span>
+        <div><strong>REG-RAG</strong><small>金融监管可信问答</small></div>
+      </div>
+      <nav id="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="qa"><span aria-hidden="true">问</span><b>智能问答</b></button>
+        <button class="nav-item" data-view="evidence"><span aria-hidden="true">证</span><b>证据查看</b></button>
+        <button class="nav-item" data-view="knowledge"><span aria-hidden="true">库</span><b>知识库管理</b></button>
+        <button class="nav-item" data-view="audit"><span aria-hidden="true">析</span><b>解析审计</b></button>
+        <button class="nav-item" data-view="health"><span aria-hidden="true">态</span><b>系统运行状态</b></button>
+        <button class="nav-item" data-view="evaluation"><span aria-hidden="true">评</span><b>评估与演示</b></button>
+      </nav>
+      <div class="sidebar-status">
+        <span id="healthDot" class="status-dot"></span>
+        <div><strong id="sidebarHealth">正在连接</strong><small id="sidebarLlm">确定性 RAG</small></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="page-heading">
+          <p class="eyebrow" id="viewEyebrow">可信问答工作台</p>
+          <h1 id="viewTitle">智能问答</h1>
+        </div>
+        <div class="top-status">
+          <span class="status-chip neutral"><i></i><span><strong id="llmMode">LLM 影子模式</strong><small>LLM SHADOW</small></span></span>
+          <span class="status-chip success"><i></i><span><strong id="systemMode">确定性引擎运行中</strong><small>Deterministic Active</small></span></span>
+        </div>
+      </header>
+
+      <section class="view active" id="view-qa">
+        <div class="trust-strip" aria-label="系统可信状态">
+          <span><i></i>证据可追溯 <small>Evidence Grounded</small></span>
+          <span><i></i>关键字段保护 <small>Critical Fields Protected</small></span>
+          <span><i></i>确定性回退 <small>Deterministic Fallback</small></span>
+          <span class="release-chip">COMPETITION CANDIDATE · RC1</span>
+        </div>
+
+        <div class="question-workspace">
+          <div class="composer">
+            <div class="workspace-kicker"><span>REGULATORY QUERY</span><strong>监管可信问答工作台</strong></div>
+            <label for="question">请输入需要核验的监管问题</label>
+            <textarea id="question" rows="4" maxlength="4000" placeholder="查询监管条款、报表指标，或发起跨文件推理…"></textarea>
+            <div class="composer-actions">
+              <select id="requestedMode" aria-label="Pipeline 模式">
+                <option value="auto">自动调度</option>
+                <option value="reference_v1">条款检索</option>
+                <option value="table_specialist">表格专家</option>
+                <option value="cross_file">跨文件推理</option>
+              </select>
+              <button id="submitQuestion" class="primary"><span>提交查询</span><b aria-hidden="true">→</b></button>
+            </div>
+          </div>
+          <aside class="conversation">
+            <div class="trust-panel-head">
+              <div><small>SYSTEM TRUST</small><strong>可信状态</strong></div>
+              <span class="live-indicator"><i></i>LIVE</span>
+            </div>
+            <dl class="trust-facts">
+              <div><dt>回答依据</dt><dd>真实语料证据</dd></div>
+              <div><dt>数值计算</dt><dd>确定性执行</dd></div>
+              <div><dt>证据不足</dt><dd>安全拒答</dd></div>
+            </dl>
+            <div class="section-heading history-heading"><h2>最近查询</h2><button class="icon-button" id="clearHistory" title="清空历史" aria-label="清空历史">×</button></div>
+            <div id="historyList" class="history-list"><p class="empty">暂无查询记录</p></div>
+          </aside>
+        </div>
+
+        <section class="capability-section" aria-labelledby="capabilityTitle">
+          <div class="section-heading">
+            <div><h2 id="capabilityTitle">四类核心能力</h2><p>选择场景即可填入真实演示问题</p></div>
+          </div>
+          <div class="capability-grid" id="capabilityGrid">
+            <button class="capability-item" data-capability="regulation"><span>01</span><div><strong>监管条款</strong><small>制度原文与条款依据</small></div><b>→</b></button>
+            <button class="capability-item" data-capability="excel"><span>02</span><div><strong>Excel 取数</strong><small>Sheet · Cell · Period · Unit</small></div><b>→</b></button>
+            <button class="capability-item" data-capability="cross_file"><span>03</span><div><strong>跨文件推理</strong><small>口径、指标与报表证据</small></div><b>→</b></button>
+            <button class="capability-item" data-capability="refusal"><span>04</span><div><strong>安全拒答</strong><small>证据不足时保护事实边界</small></div><b>→</b></button>
+          </div>
+        </section>
+
+        <div id="answerState" class="answer-state empty-state">
+          <strong>等待查询</strong><span>选择核心能力，或直接输入监管问题</span>
+        </div>
+        <article id="answerPanel" class="answer-panel hidden">
+          <div class="answer-header">
+            <div><span class="section-label">FINAL ANSWER</span><span id="trustBadge" class="pill success">可信回答</span><span id="answerType" class="pill neutral">regulation_fact</span></div>
+            <span id="latency">0 ms</span>
+          </div>
+          <div id="answerText" class="answer-text"></div>
+          <div id="refusalReason" class="refusal-box hidden">
+            <div class="safe-decision-title"><span>SAFE DECISION</span><strong id="refusalTitle">当前证据不足</strong></div>
+            <p id="refusalMessage"></p>
+            <div class="refusal-guidance">
+              <div><span>WHY · 系统处置</span><b>未生成事实性结论</b></div>
+              <div><span>MISSING EVIDENCE · 缺失证据</span><b id="refusalMissing"></b></div>
+              <div><span>HOW TO CONTINUE · 如何继续</span><b id="refusalNext"></b></div>
+            </div>
+          </div>
+          <dl class="answer-meta">
+            <div><dt>Pipeline</dt><dd id="pipeline">reference_v1</dd></div>
+            <div><dt>状态</dt><dd id="answerStatus">ANSWERED</dd></div>
+            <div><dt>置信度</dt><dd id="confidence">0%</dd></div>
+            <div><dt>证据</dt><dd id="evidenceCount">0 条</dd></div>
+            <div><dt>Fallback</dt><dd id="fallback">否</dd></div>
+          </dl>
+          <details class="trace-details">
+            <summary>技术追踪与运行阶段</summary>
+            <div id="traceStages" class="trace-stages"></div>
+          </details>
+        </article>
+      </section>
+
+      <section class="view" id="view-evidence">
+        <div class="view-intro">
+          <div><span class="section-label">EVIDENCE INSPECTOR</span><h2>答案证据链</h2><p>从最终结论反向核验来源、语义坐标与原始证据</p></div>
+          <span id="evidenceSummary" class="pill neutral">0 条证据</span>
+        </div>
+        <div id="evidenceAnswerSummary" class="evidence-answer-summary hidden"></div>
+        <div id="crossFileChain" class="cross-chain hidden"></div>
+        <div id="evidenceList" class="evidence-list"><div class="empty-state"><strong>尚无证据</strong><span>完成一次查询后查看来源</span></div></div>
+      </section>
+
+      <section class="view" id="view-knowledge">
+        <div class="view-intro">
+          <div><span class="section-label">KNOWLEDGE OPERATIONS</span><h2>监管知识资产</h2><p>官方语料与用户上传文档严格隔离、统一索引</p></div>
+          <span class="pill success">INDEX READY</span>
+        </div>
+        <div class="stats-band" id="documentStats"></div>
+        <div class="knowledge-layout">
+          <div class="upload-panel">
+            <span class="section-label">NEW DOCUMENT</span>
+            <h2>上传并即时索引</h2>
+            <div class="drop-zone" id="dropZone">
+              <input id="fileInput" type="file" accept=".pdf,.docx,.xlsx">
+              <span class="upload-symbol" aria-hidden="true">↑</span>
+              <strong>选择 PDF、DOCX 或 XLSX</strong>
+              <span>最大 20 MB · 上传后自动解析与索引</span>
+            </div>
+            <div id="uploadProgress" class="progress hidden"><span></span></div>
+            <p id="uploadMessage" class="message"></p>
+            <div class="upload-flow"><span>UPLOAD</span><b>→</b><span>PARSE</span><b>→</b><span>INDEXED</span><b>→</b><span>ANSWER</span></div>
+          </div>
+          <div class="document-panel">
+            <div class="section-heading"><div><h2>文档目录</h2><p>真实运行语料与索引状态</p></div><button id="refreshDocuments" class="secondary">刷新</button></div>
+            <div class="table-wrap">
+              <table><thead><tr><th>来源</th><th>文档</th><th>类型</th><th>索引状态</th><th>操作</th></tr></thead><tbody id="documentRows"></tbody></table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-audit">
+        <div class="view-intro">
+          <div><span class="section-label">PARSER TRANSPARENCY</span><h2>文档解析审计</h2><p>核验系统实际提取的章节、文本块、表格与单元格</p></div>
+          <span id="auditDocBadge" class="pill neutral">未选择文档</span>
+        </div>
+        <div id="auditSummary" class="stats-band"></div>
+        <div id="auditContent" class="audit-content"><div class="empty-state"><strong>选择用户文档</strong><span>从知识库目录进入解析审计</span></div></div>
+      </section>
+
+      <section class="view" id="view-health">
+        <div class="view-intro">
+          <div><span class="section-label">SYSTEM HEALTH</span><h2>运行完整性</h2><p>组件状态、工作模式与确定性回退检查</p></div>
+          <span class="pill neutral">COMPETITION CANDIDATE · RC1</span>
+        </div>
+        <div id="healthSummary" class="health-banner"></div>
+        <div id="healthGrid" class="health-grid"></div>
+      </section>
+
+      <section class="view" id="view-evaluation">
+        <div class="evaluation-header">
+          <div><span class="section-label">CHAMPION METRIC HIERARCHY</span><h2>COMPETITION_CANDIDATE_RC1</h2><p>冻结候选版本的分层评估视图</p></div>
+          <div class="evaluation-disclaimer"><strong>KNOWN OFFICIAL-STYLE EVALUATION SET</strong><span>NOT OFFICIAL LEADERBOARD</span></div>
+        </div>
+        <div class="evaluation-layout">
+          <div class="scoreboard">
+            <section class="metric-section metric-section-primary">
+              <div class="metric-section-head"><div><span>01</span><strong>核心可信指标</strong></div><small>KNOWN OFFICIAL-STYLE EVALUATION SET</small></div>
+              <div id="metricGrid" class="metric-grid"></div>
+            </section>
+            <section class="metric-section" id="capabilityMetrics"></section>
+            <section class="metric-section internal-metrics" id="internalMetrics"></section>
+          </div>
+          <div class="demo-panel">
+            <div class="section-heading"><div><span class="section-label">GOLDEN DEMOS</span><h2>竞赛演示场景</h2><p>点击后由真实系统实时运行</p></div></div>
+            <div id="demoPresets" class="preset-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

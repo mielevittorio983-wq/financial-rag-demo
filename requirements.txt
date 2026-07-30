@@ -1,0 +1,11 @@
+pydantic==2.13.4
+python-docx==1.2.0
+openpyxl==3.1.5
+pypdf==6.10.0
+reportlab==4.4.9
+pandas==3.0.1
+rank-bm25==0.2.2
+numpy==2.3.5
+tqdm==4.67.3
+fastapi==0.135.1
+uvicorn==0.42.0

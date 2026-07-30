@@ -1,0 +1,17 @@
+{
+  "profile": "public_demo",
+  "data": {"records_path": "data/synthetic/records.jsonl", "source_manifest_path": "docs/unseen_100_manifest_v2.csv", "source_manifest_sha256": "fb3e9ad2dbe2fb59c54855dc9840fb5a41d6f1a69cd7a262d453c5958e362a2d", "expected_document_count": 500},
+  "parser": {"cache_path": null, "read_only_cache": true, "deterministic_ids": true},
+  "index": {"path": "data/official_benchmark/full500_semantic_v2.sqlite", "sha256": "e3df5429bab379e8042d6ac718ab9304621a50f7d7921bd82457c5f4ca2db3bc", "read_only": true},
+  "retrieval": {"mode": "hybrid", "top_k": 5, "candidate_budget": 5, "reranker": "none"},
+  "router": {"default_pipeline": "reference_v1", "experimental_weights_enabled": false},
+  "dispatcher": {"state": "shadow"},
+  "executor": {"default": "reference_v1", "table_executor_v2": "ready_gated"},
+  "cross_file": {"state": "ready_gated", "explicit_mode_enabled": true, "shadow_enabled": true},
+  "evidence_verifier": {"enabled": true, "require_evidence_for_answer": true},
+  "renderer": {"provider": "deterministic_template"},
+  "llm": {"mode": "DISABLED", "provider": "none"},
+  "logging": {"level": "INFO", "structured": true},
+  "runtime": {"python_hash_seed": "0", "reference_tag": "REPRODUCIBLE_REFERENCE_V1", "reference_commit": "418e39b16e249fe0071e16263ff22f6ec15ed07a"},
+  "debug": false
+}
