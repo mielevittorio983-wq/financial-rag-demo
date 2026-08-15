@@ -492,6 +492,9 @@ select {
   line-height: 1.7;
   white-space: pre-wrap;
 }
+.provenance-notice { margin: 0 18px 14px; padding: 9px 11px; color: var(--warning); background: var(--warning-soft); border-left: 3px solid var(--warning); font-size: 10px; line-height: 1.5; }
+.provenance-line { display: grid; gap: 3px; margin-top: 8px; padding: 9px 11px; background: #f7f9f7; border-left: 3px solid var(--brand-secondary); font-size: 9px; }
+.provenance-line span { color: var(--text-muted); }
 .refusal-box {
   margin: 2px 0 16px;
   padding: 15px;

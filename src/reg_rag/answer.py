@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from reg_rag.generation import GeneratorName, generate_grounded_answer
 from reg_rag.io import read_jsonl, write_jsonl
 from reg_rag.retrieval import RerankerName, SearchHit, retrieve_records
+from reg_rag.retrieval.sufficiency import (
+    ABSOLUTE_RELEVANCE_THRESHOLD,
+    SufficiencyDecision,
+    answer_confidence,
+    assess_evidence_sufficiency,
+    evidence_anchor_coverage,
+)
 from reg_rag.answer_specialists import (
     REFUSAL_ZH,
     anchored_regulatory_requirement,
@@ -37,6 +45,8 @@ def answer_question(
         payload["question"] = question
         payload = enforce_audit(payload, question, check_hallucination=generator == "openai")
         payload["validation"] = validate_grounded_answer(payload["answer"], payload["evidence"], refusal=payload["refusal"])
+        payload["confidence"] = 0.0
+        payload["sufficiency"] = {"passed": False, "reason": "POLICY_REFUSAL"}
         return payload
 
     anchored = anchored_regulatory_requirement(question, records)
@@ -56,34 +66,244 @@ def answer_question(
         payload["validation"] = validate_grounded_answer(
             payload["answer"], payload["evidence"], refusal=payload["refusal"]
         )
+        payload["confidence"] = 0.95
+        payload["sufficiency"] = {"passed": True, "reason": "EXACT_QUOTED_ANCHOR"}
         return payload
 
     hits = retrieve_records(records, question, top_k=max(top_k, 24), mode=mode, reranker=reranker)
     hits = _with_page_context(records, question, hits)
     hits = expand_table_summary_hits(records, question, hits)
-    if _should_refuse(question, hits):
+    sufficiency = assess_evidence_sufficiency(records, question)
+    trace_records = [hit.record for hit in hits]
+    structured_trace = trace_table_judgement(question, trace_records) or trace_table_derived(
+        question,
+        trace_records,
+    )
+    if (
+        not sufficiency.passed
+        and sufficiency.reason == "NO_CLEAR_WINNER"
+        and _structured_trace_is_complete(structured_trace)
+    ):
+        sufficiency = replace(
+            sufficiency,
+            passed=True,
+            reason="STRUCTURED_COORDINATE_RESOLUTION",
+            confidence=min(0.9, 0.45 + 0.35 * sufficiency.signals.entity_coverage),
+        )
+    if _should_refuse(question, hits) or not sufficiency.passed:
         payload = generate_grounded_answer(question, [], REFUSAL, True, generator=generator, adapter_config=adapter_config)
         payload["question"] = question
         payload = enforce_audit(payload, question, check_hallucination=generator == "openai")
         payload["validation"] = validate_grounded_answer(payload["answer"], payload["evidence"], refusal=payload["refusal"])
+        payload["confidence"] = 0.0
+        payload["sufficiency"] = sufficiency.as_dict()
         return payload
 
-    answer_hits = hits[: min(24, len(hits))]
-    fallback_answer = specialized_answer(question, records) or _compose_answer(question, answer_hits)
-    reasoning_trace = trace_table_judgement(question, [hit.record for hit in answer_hits]) or trace_table_derived(question, [hit.record for hit in answer_hits])
-    grounded_hits = _evidence_hits_for_answer(hits, reasoning_trace, limit=16)
-    grounded_hits = _with_answer_supporting_hits(records, question, fallback_answer, grounded_hits, limit=16)
+    answer_hits = _qualified_evidence_hits(hits, sufficiency)
+    if not answer_hits:
+        payload = generate_grounded_answer(question, [], REFUSAL, True, generator=generator, adapter_config=adapter_config)
+        payload["question"] = question
+        payload["validation"] = validate_grounded_answer(payload["answer"], [], refusal=True)
+        payload["confidence"] = 0.0
+        payload["sufficiency"] = {**sufficiency.as_dict(), "reason": "NO_ABOVE_THRESHOLD_EVIDENCE"}
+        return payload
+    traced_answer = answer_table_judgement(question, trace_records) or answer_table_derived(
+        question,
+        trace_records,
+    )
+    fallback_answer = traced_answer or specialized_answer(question, records) or _compose_answer(question, answer_hits)
+    reasoning_trace = structured_trace
+    grounding_candidates = answer_hits
+    derived_evidence = _trace_to_evidence(reasoning_trace)
+    if reasoning_trace:
+        grounding_candidates = _dedupe_hits(
+            [*_evidence_hits_for_answer(hits, reasoning_trace, limit=5), *answer_hits]
+        )
+    additional_evidence = [derived_evidence] if derived_evidence else []
+    grounded_hits = _minimal_sufficient_hits(
+        question,
+        fallback_answer,
+        grounding_candidates,
+        limit=5,
+        additional_evidence=additional_evidence,
+        required_locators={
+            str(locator)
+            for locator in (
+                (reasoning_trace or {}).get("table_locator"),
+                (reasoning_trace or {}).get("rule_locator"),
+            )
+            if locator
+        },
+    )
+    if not grounded_hits:
+        payload = generate_grounded_answer(question, [], REFUSAL, True, generator=generator, adapter_config=adapter_config)
+        payload["question"] = question
+        payload["validation"] = validate_grounded_answer(payload["answer"], [], refusal=True)
+        payload["confidence"] = 0.0
+        payload["sufficiency"] = {**sufficiency.as_dict(), "passed": False, "reason": "ANSWER_NOT_SUPPORTED"}
+        return payload
     evidence = [_hit_to_evidence(hit) for hit in grounded_hits]
-    trace_evidence = _trace_to_evidence(reasoning_trace)
-    if trace_evidence:
-        evidence.append(trace_evidence)
+    evidence.extend(additional_evidence)
     payload = generate_grounded_answer(question, evidence, fallback_answer, False, generator=generator, adapter_config=adapter_config)
     if reasoning_trace:
         payload["reasoning_trace"] = reasoning_trace
     payload["question"] = question
     payload = enforce_audit(payload, question, check_hallucination=generator == "openai")
     payload["validation"] = validate_grounded_answer(payload["answer"], payload["evidence"], refusal=payload["refusal"])
+    consistency = _evidence_consistency(question, payload["answer"], payload["evidence"])
+    if not payload["refusal"] and consistency < 1.0:
+        payload = generate_grounded_answer(question, [], REFUSAL, True, generator=generator, adapter_config=adapter_config)
+        payload["question"] = question
+        payload["validation"] = validate_grounded_answer(payload["answer"], [], refusal=True)
+        payload["confidence"] = 0.0
+        payload["sufficiency"] = {**sufficiency.as_dict(), "passed": False, "reason": "FINAL_EVIDENCE_INCONSISTENT"}
+        return payload
+    payload["confidence"] = answer_confidence(sufficiency, consistency)
+    payload["sufficiency"] = sufficiency.as_dict()
     return payload
+
+
+def _qualified_evidence_hits(
+    hits: list[SearchHit],
+    sufficiency: SufficiencyDecision,
+) -> list[SearchHit]:
+    score_by_locator = dict(
+        zip(sufficiency.signals.candidate_locators, sufficiency.signals.candidate_scores)
+    )
+    qualified: list[SearchHit] = []
+    seen: set[str] = set()
+    for hit in hits:
+        locator = _hit_locator(hit) or ""
+        score = score_by_locator.get(locator)
+        if score is None or score < sufficiency.absolute_threshold or locator in seen:
+            continue
+        qualified.append(SearchHit(score=score, record=hit.record))
+        seen.add(locator)
+    return qualified
+
+
+def _minimal_sufficient_hits(
+    question: str,
+    answer: str,
+    hits: list[SearchHit],
+    *,
+    limit: int,
+    additional_evidence: list[dict[str, Any]] | None = None,
+    required_locators: set[str] | None = None,
+) -> list[SearchHit]:
+    required = required_locators or set()
+    ordered = sorted(
+        hits,
+        key=lambda hit: (
+            0 if (_hit_locator(hit) or "") in required else 1,
+            -_answer_support_score(answer, _hit_text(hit)),
+            -hit.score,
+            _hit_locator(hit) or "",
+        ),
+    )
+    selected: list[SearchHit] = []
+    for hit in ordered[:limit]:
+        selected.append(hit)
+        evidence = [*[_hit_to_evidence(item) for item in selected], *(additional_evidence or [])]
+        selected_locators = {_hit_locator(item) or "" for item in selected}
+        if required <= selected_locators and _evidence_consistency(question, answer, evidence) >= 1.0:
+            return selected
+    return []
+
+
+def _dedupe_hits(hits: list[SearchHit]) -> list[SearchHit]:
+    output: list[SearchHit] = []
+    seen: set[str] = set()
+    for hit in hits:
+        key = _hit_locator(hit) or str(id(hit.record))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(hit)
+    return output
+
+
+def _structured_trace_is_complete(trace: dict[str, Any] | None) -> bool:
+    if not trace:
+        return False
+    return bool(trace.get("table_locator") and trace.get("rule_locator"))
+
+
+def _evidence_consistency(question: str, answer: str, evidence: list[dict[str, Any]]) -> float:
+    if not evidence:
+        return 0.0
+    texts = [str(item.get("text") or item.get("supporting_text") or "") for item in evidence]
+    if not _answer_type_compatible(question, answer, texts):
+        return 0.0
+    validation = validate_grounded_answer(answer, evidence, refusal=False)
+    if not validation.get("valid"):
+        return 0.0
+    if evidence_anchor_coverage(question, texts) <= 0.0:
+        return 0.0
+    answer_numbers = re.findall(r"\d+(?:,\d{3})*(?:\.\d+)?%?", answer)
+    if answer_numbers:
+        return 1.0
+    joined = _normalize_support_text(" ".join(texts))
+    normalized_answer = _normalize_support_text(answer)
+    if normalized_answer and normalized_answer in joined:
+        return 1.0
+    return 1.0 if _character_bigram_coverage(normalized_answer, joined) >= 0.55 else 0.0
+
+
+def _answer_type_compatible(question: str, answer: str, evidence_texts: list[str]) -> bool:
+    support = " ".join([answer, *evidence_texts])
+    asks_amount = any(term in question for term in ("金额", "多少钱", "余额", "收入", "支出", "资产总额"))
+    asks_duration = any(
+        term in question
+        for term in ("多久", "多少日", "多少天", "几年", "几个月", "几个工作日", "保存期限")
+    )
+    asks_date = any(term in question for term in ("哪一天", "何时生效", "生效日期", "发布日期"))
+    asks_ratio = any(term in question for term in ("率是多少", "比例是多少", "率最低", "比例最低", "率是否"))
+    if asks_amount and not _contains_money(support):
+        return False
+    if asks_duration and not re.search(
+        r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千万两]+)\s*(?:个?工作日|日|天|个月|月|年)",
+        support,
+    ):
+        return False
+    if asks_date and not re.search(r"20\d{2}(?:[-年/]\d{1,2})?(?:[-月/]\d{1,2})?日?", support):
+        return False
+    if asks_ratio and "%" not in support:
+        return False
+    return True
+
+
+def _contains_money(value: str) -> bool:
+    number = r"(?:\d+(?:,\d{3})*(?:\.\d+)?|[一二三四五六七八九十百千万亿两]+)"
+    return bool(
+        re.search(rf"(?:人民币\s*)?{number}\s*(?:万|亿)?元", value)
+        or re.search(rf"{number}\s*(?:万元|亿元)", value)
+    )
+
+
+def _answer_support_score(answer: str, evidence_text: str) -> float:
+    normalized_answer = _normalize_support_text(answer)
+    normalized_evidence = _normalize_support_text(evidence_text)
+    if normalized_answer and normalized_answer in normalized_evidence:
+        return 2.0
+    numbers = set(re.findall(r"\d+(?:,\d{3})*(?:\.\d+)?%?", answer))
+    number_score = (
+        sum(number in evidence_text for number in numbers) / len(numbers)
+        if numbers
+        else 0.0
+    )
+    return number_score + _character_bigram_coverage(normalized_answer, normalized_evidence)
+
+
+def _normalize_support_text(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff%]+", "", str(value)).lower()
+
+
+def _character_bigram_coverage(left: str, right: str) -> float:
+    if len(left) < 2 or not right:
+        return 0.0
+    grams = {left[index : index + 2] for index in range(len(left) - 1)}
+    return sum(gram in right for gram in grams) / len(grams) if grams else 0.0
 
 
 def _with_page_context(records: list[dict[str, Any]], question: str, hits: list[SearchHit]) -> list[SearchHit]:
@@ -295,13 +515,15 @@ def _trace_to_evidence(reasoning_trace: dict[str, Any] | None) -> dict[str, Any]
         return None
     return {
         "locator": "derived:table_threshold_gap",
-        "doc_id": None,
+        "doc_id": "derived_calculation",
+        "source_title": "确定性计算",
         "text": (
             f"派生计算：观测值{_fmt_number(float(observed))}%与监管要求{_fmt_number(float(threshold))}%"
             f"相差{_fmt_number(float(gap))}个百分点。"
         ),
         "local_path": None,
         "score": None,
+        "provenance_kind": "DERIVED_CALCULATION",
     }
 
 
@@ -365,6 +587,9 @@ def eval_answers(pred_path: Path, qa_path: Path) -> dict:
 
 def _compose_answer(question: str, hits: list[SearchHit]) -> str:
     joined = "\n".join(_hit_text(hit) for hit in hits[:8])
+    large_transaction_answer = _extract_large_transaction_thresholds(question, hits)
+    if large_transaction_answer:
+        return large_transaction_answer
     specialist = specialized_answer(question, [hit.record for hit in hits[:24]])
     if specialist:
         return specialist
@@ -390,6 +615,32 @@ def _compose_answer(question: str, hits: list[SearchHit]) -> str:
     if value:
         return value
     return _first_sentence(_hit_text(hits[0])) if hits else REFUSAL
+
+
+def _extract_large_transaction_thresholds(
+    question: str,
+    hits: list[SearchHit],
+) -> str | None:
+    if "大额交易" not in question or not any(term in question for term in ("金额", "标准", "门槛", "阈值")):
+        return None
+    text = "\n".join(_hit_text(hit) for hit in hits[:8])
+    patterns = (
+        ("现金收支", r"人民币\s*(\d+)万元以上（含\1万元）、外币等值\s*(\d+)万美元以上（含\2万美元）[^。]*现金"),
+        ("非自然人账户款项划转", r"非自然人客户[^。]*?人民币\s*(\d+)万元以上（含\1万元）、外币等值\s*(\d+)万美元以上（含\2万美元）"),
+        ("自然人境内款项划转", r"自然人客户[^。]*?人民币\s*(\d+)万元以上（含\1万元）、外币等值\s*(\d+)万美元以上（含\2万美元）[^。]*境内款项划转"),
+        ("自然人跨境款项划转", r"自然人客户[^。]*?人民币\s*(\d+)万元以上（含\1万元）、外币等值\s*(\d+)万美元以上（含\2万美元）[^。]*跨境款项划转"),
+    )
+    values: list[tuple[str, str, str]] = []
+    for label, pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            return None
+        values.append((label, match.group(1), match.group(2)))
+    rendered = "；".join(
+        f"{label}为人民币{renminbi}万元以上（含{renminbi}万元）或外币等值{foreign}万美元以上（含{foreign}万美元）"
+        for label, renminbi, foreign in values
+    )
+    return f"大额交易报告金额标准按交易类型区分：{rendered}。"
 
 
 def _extract_template_answer(question: str, hits: list[SearchHit]) -> str | None:
@@ -1149,9 +1400,14 @@ def _hit_to_evidence(hit: SearchHit) -> dict:
     evidence = {
         "locator": _hit_locator(hit),
         "doc_id": record.get("doc_id"),
+        "source_title": (record.get("metadata") or {}).get("source_title")
+        or ((record.get("title_path") or [None])[0]),
+        "source_url": record.get("source_url"),
         "text": _hit_text(hit),
         "local_path": record.get("local_path"),
         "score": hit.score,
+        "raw_value": record.get("value"),
+        "display_value": record.get("display_value"),
     }
     metadata = record.get("metadata") or {}
     lineage_fields = (
@@ -1173,6 +1429,9 @@ def _hit_to_evidence(hit: SearchHit) -> dict:
         "unit",
         "parse_confidence",
         "ocr_confidence",
+        "issuer",
+        "publish_date",
+        "provenance_kind",
     )
     for field in lineage_fields:
         value = record.get(field)

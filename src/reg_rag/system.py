@@ -126,7 +126,8 @@ class RegulationFactPipeline:
             [item.coordinate for item in evidence if item.coordinate]
         )
         refused = bool(payload.get("refusal"))
-        validation = payload.get("validation") or {}
+        confidence = float(payload.get("confidence", 0.0))
+        sufficiency = payload.get("sufficiency") or {}
         return AnswerResult(
             answer=str(payload.get("answer") or ""),
             status="REFUSED" if refused else "ANSWERED",
@@ -134,8 +135,12 @@ class RegulationFactPipeline:
             evidence=evidence,
             citations=citations,
             critical_entities=_critical_entities(str(payload.get("answer") or "")),
-            refusal_reason="REFERENCE_V1_REFUSAL" if refused else None,
-            confidence=1.0 if validation.get("valid", True) else 0.5,
+            refusal_reason=(
+                str(sufficiency.get("reason") or "REFERENCE_V1_REFUSAL")
+                if refused
+                else None
+            ),
+            confidence=confidence,
             trace_id=trace_id,
             latency_ms=(time.perf_counter() - started) * 1000,
         )
@@ -743,6 +748,9 @@ def _evidence_item(item: dict[str, Any]) -> EvidenceItem:
         "bbox",
         "source_row_locators",
         "source_table_ids",
+        "issuer",
+        "publish_date",
+        "provenance_kind",
     )
     metadata = {key: item[key] for key in metadata_keys if item.get(key) is not None}
     return EvidenceItem(

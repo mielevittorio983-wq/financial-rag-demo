@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "label": "KNOWN OFFICIAL-STYLE EVALUATION SET",
+  "known": {
+    "correct": 299,
+    "total": 300,
+    "accuracy": 0.9966666666666667
+  },
+  "objectives": {
+    "O1": {
+      "label": "Regulatory Fact",
+      "total": 200,
+      "rate": 1.0,
+      "correct": 200
+    },
+    "O2": {
+      "label": "Table Lookup",
+      "total": 100,
+      "rate": 0.99,
+      "correct": 99
+    },
+    "O3": {
+      "label": "Evidence Support",
+      "total": 300,
+      "rate": 0.9966666666666667,
+      "correct": 299
+    },
+    "O4": {
+      "label": "Critical Field Error",
+      "total": 262,
+      "rate": 0.003816793893129771,
+      "errors": 1
+    },
+    "O5": {
+      "label": "Insufficient Evidence Handling",
+      "total": 20,
+      "rate": 0.9,
+      "correct": 18
+    }
+  },
+  "adversarial_refusal": {
+    "correct": 14,
+    "total": 14,
+    "rate": 1.0
+  },
+  "cross_file": {
+    "final_answer": 20,
+    "evidence_chain": 19,
+    "total": 20
+  },
+  "core_28": {
+    "M2": 13,
+    "M3": 13,
+    "total": 28
+  },
+  "specialist_switch": {
+    "correct": 30,
+    "total": 30
+  },
+  "internal_stress": {
+    "label": "INTERNAL STRESS | NOT BLIND | NOT OFFICIAL SCORE",
+    "passed": 27,
+    "total": 30
+  },
+  "stability": {
+    "excel": {
+      "runs": 20,
+      "answered": 20,
+      "http_502": 0,
+      "http_non_200": 0,
+      "http_502_rate": 0.0,
+      "p95_ms": 316.245,
+      "max_ms": 330.623
+    },
+    "cross_file": {
+      "runs": 20,
+      "answered": 20,
+      "http_502": 0,
+      "http_non_200": 0,
+      "http_502_rate": 0.0,
+      "p95_ms": 225.068,
+      "max_ms": 705.703
+    }
+  },
+  "metric_source": {
+    "O1_O5": "artifacts/rag_003f/final_reproducibility_snapshot.json",
+    "O1_O5_sha256": "eb251a22c6acf1db34409cc85b4218a4caba440e64569bb08b5c0019be5a5d68",
+    "adversarial_refusal": "tests/adversarial_refusal.jsonl",
+    "adversarial_refusal_sha256": "a7e136176c0a60cac32ba829d0de8ff3f2f250e7bcb97b53d28423b1f6c3f2a0",
+    "generator": "scripts/run_public_hardening_eval.py"
+  },
+  "disclaimer": "Internal evaluation only; not an official leaderboard or blind score.",
+  "gates": {
+    "health_pass": true,
+    "adversarial_refusal_100_percent": true,
+    "backend_stability_502_zero": true
+  }
+}

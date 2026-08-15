@@ -11,16 +11,22 @@
 !data/
 !data/synthetic/
 !data/synthetic/records.jsonl
+!data/public_reference/
+!data/public_reference/**
 !data/official_benchmark/
 !data/official_benchmark/full500_semantic_v2.sqlite
 !data/public_demo/
 !data/public_demo/new_document_demo.docx
 !data/demo_sources/
 !data/demo_sources/**
+!public_sources/
+!public_sources/**
 !artifacts/
 !artifacts/rag_002a/
 !artifacts/rag_002a/document_family_catalog.csv
 !artifacts/rag_002a/table_template_catalog.csv
+!artifacts/rag_public_hardening/
+!artifacts/rag_public_hardening/public_metrics.json
 
 **/__pycache__/
 **/*.py[cod]

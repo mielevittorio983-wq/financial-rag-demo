@@ -85,6 +85,11 @@ function renderAnswer(result) {
   $("trustBadge").className = `pill ${refused ? "warning" : "success"}`;
   $("answerType").textContent = result.answer_type;
   $("answerText").textContent = result.answer || "未生成事实答案";
+  const containsSynthetic = Boolean(result.provenance_summary?.contains_synthetic_fixture);
+  $("provenanceNotice").classList.toggle("hidden", !containsSynthetic);
+  $("provenanceNotice").textContent = containsSynthetic
+    ? "来源边界：本回答包含 SYNTHETIC_FIXTURE 合成测试夹具，不代表官方监管文件。"
+    : "";
   $("latency").textContent = `${result.latency_ms.toFixed(1)} ms`;
   $("pipeline").textContent = result.pipeline;
   $("answerStatus").textContent = result.status;
@@ -142,7 +147,7 @@ function renderEvidence(result) {
     <details class="evidence-item" ${index === 0 ? "open" : ""}>
       <summary>
         <div class="evidence-index"><span>${String(index + 1).padStart(2, "0")}</span><div><strong>${escapeHtml(item.source_title || item.doc_id)}</strong><small>${escapeHtml(item.doc_id)}</small></div></div>
-        <span class="pill neutral">${escapeHtml(item.coordinate || item.clause || "TEXT EVIDENCE")}</span>
+        <span class="pill ${item.provenance_kind === "SYNTHETIC_FIXTURE" ? "warning" : "neutral"}">${escapeHtml(item.provenance_kind || "UNDECLARED_SOURCE")}</span>
       </summary>
       <div class="evidence-body">
         <div class="inspector-grid">
@@ -171,12 +176,15 @@ function renderEvidence(result) {
               <div><dt>Evidence Confidence</dt><dd>${item.evidence_confidence == null ? "—" : `${Math.round(item.evidence_confidence * 100)}%`}</dd></div>
               <div><dt>发布机构</dt><dd>${escapeHtml(item.issuer || "—")}</dd></div>
               <div><dt>发布日期</dt><dd>${escapeHtml(item.publish_date || "—")}</dd></div>
+              <div><dt>来源页面</dt><dd>${escapeHtml(item.source_url || "—")}</dd></div>
+              <div><dt>本地文件</dt><dd>${escapeHtml(item.local_path || "—")}</dd></div>
             </dl>
           </section>
         </div>
         <div class="evidence-label">ORIGINAL CELL CONTENT / 原文或原单元格内容</div>
         <div class="evidence-text">${escapeHtml(item.text || item.display_value || item.raw_value || "")}</div>
         <div class="semantic-path"><strong>Semantic Path</strong><span>${escapeHtml((item.semantic_path || item.column_header_path || []).join(" / ") || "—")}</span></div>
+        <div class="provenance-line"><strong>${escapeHtml(item.provenance_kind || "UNDECLARED_SOURCE")}</strong><span>${escapeHtml(item.provenance_note || "")}</span></div>
       </div>
     </details>
   `).join("") : '<div class="empty-state"><strong>没有可展示证据</strong><span>系统已安全拒答或未定位到来源</span></div>';
@@ -328,19 +336,22 @@ async function loadMetrics() {
   try {
     const [metrics, demos] = await Promise.all([api("/metrics/summary"), api("/demo/presets")]);
     state.presets = demos.presets;
+    const percent = (value) => `${(Number(value) * 100).toFixed(2).replace(/\.00$/, "")}%`;
+    const fraction = (item, field = "correct") => `${item[field]} / ${item.total}`;
     const primary = [
-      ["KNOWN", "99.67%", "299 / 300", "hero"],
-      ["Evidence Support", "99.67%", "299 / 300", "hero"],
-      ["Critical Field Error", "0.38%", "1 / 262 · LOWER IS BETTER", "risk"],
+      ["KNOWN", percent(metrics.known.accuracy), fraction(metrics.known), "hero"],
+      ["Evidence Support", percent(metrics.objectives.O3.rate), fraction(metrics.objectives.O3), "hero"],
+      ["Critical Field Error", percent(metrics.objectives.O4.rate), `${fraction(metrics.objectives.O4, "errors")} · LOWER IS BETTER`, "risk"],
     ];
     const capability = [
-      ["Regulatory Fact", "100%", "O1 · 200 / 200"],
-      ["Table Lookup", "99%", "O2 · 99 / 100"],
-      ["Insufficient Evidence", "90%", "O5 · 18 / 20"],
+      ["Regulatory Fact", percent(metrics.objectives.O1.rate), `O1 · ${fraction(metrics.objectives.O1)}`],
+      ["Table Lookup", percent(metrics.objectives.O2.rate), `O2 · ${fraction(metrics.objectives.O2)}`],
+      ["Insufficient Evidence", percent(metrics.objectives.O5.rate), `O5 · ${fraction(metrics.objectives.O5)}`],
+      ["离题拒答率", percent(metrics.adversarial_refusal.rate), fraction(metrics.adversarial_refusal)],
       ["Cross-file", `${metrics.cross_file.final_answer}/20`, `Evidence Chain ${metrics.cross_file.evidence_chain}/20`],
     ];
     const internal = [
-      ["Internal Stress", "27/30", "高难内部压力集"],
+      ["Internal Stress", `${metrics.internal_stress.passed}/${metrics.internal_stress.total}`, "高难内部压力集"],
       ["Core Table", `${metrics.core_28.M2}/28`, "高难专项审计集，不代表总体表格准确率"],
       ["Dispatcher", `${metrics.specialist_switch.correct}/${metrics.specialist_switch.total}`, "Specialist Switch"],
     ];

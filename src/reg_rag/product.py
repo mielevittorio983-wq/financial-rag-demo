@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -65,23 +66,6 @@ DEMO_PRESETS = [
         "question": "“专项风险报送阈值”规定的具体要求是什么？",
     },
 ]
-
-PUBLIC_METRICS = {
-    "label": "KNOWN OFFICIAL-STYLE EVALUATION SET",
-    "known": {"correct": 299, "total": 300, "accuracy": 0.9967},
-    "objectives": {
-        "O1": {"label": "Regulatory Fact", "correct": 200, "total": 200},
-        "O2": {"label": "Table Lookup", "correct": 99, "total": 100},
-        "O3": {"label": "Evidence Support", "correct": 299, "total": 300},
-        "O4": {"label": "Critical Field Error", "errors": 1, "total": 262, "rate": 0.0038},
-        "O5": {"label": "Insufficient Evidence Handling", "correct": 18, "total": 20},
-    },
-    "cross_file": {"final_answer": 20, "evidence_chain": 19, "total": 20},
-    "core_28": {"M2": 13},
-    "specialist_switch": {"correct": 30, "total": 30},
-    "disclaimer": "Internal evaluation only; not an official leaderboard or blind score.",
-}
-
 
 class UserDocumentStore:
     def __init__(self, root: Path) -> None:
@@ -253,7 +237,12 @@ class ProductRuntime:
         pipeline = str(trace.routing.details.get("effective_pipeline") or "reference_v1")
         fallback = bool(trace.rendering.details.get("fallback_used"))
         evidence = [
-            _evidence_payload(item.model_dump(mode="json"), self.source_metadata, question)
+            _evidence_payload(
+                item.model_dump(mode="json"),
+                self.source_metadata,
+                question,
+                self.project_root,
+            )
             for item in result.evidence
         ]
         max_evidence_score = max(
@@ -285,6 +274,7 @@ class ProductRuntime:
             "llm_mode": self.system.config.llm.mode,
             "llm_available": self.system.llm_runtime.connectivity == "AVAILABLE",
             "fallback": fallback,
+            "provenance_summary": _provenance_summary(evidence),
         }
         self.request_traces[payload["request_id"]] = trace_payload
         return payload
@@ -308,6 +298,7 @@ class ProductRuntime:
                 "public_mode": True,
                 "deterministic_engine": "ACTIVE",
                 "llm_mode": "DISABLED",
+                "git_commit": _git_commit(self.project_root),
                 "checks": [
                     _product_health_check("RC1 Runtime", "PASS", "竞赛演示运行正常"),
                     _product_health_check("Deterministic Engine", "PASS", "确定性问答引擎运行中"),
@@ -350,18 +341,25 @@ class ProductRuntime:
 
     def documents(self) -> dict[str, Any]:
         official = _official_documents(self.project_root)
+        grounding = _grounding_documents(self.source_metadata)
         user = self.store.list()
         counts: dict[str, int] = {"pdf": 0, "docx": 0, "xlsx": 0, "other": 0}
-        for item in [*official, *user]:
+        for item in [*official, *grounding, *user]:
             suffix = str(item.get("file_type") or "").lower()
             key = suffix if suffix in counts else "other"
             counts[key] += 1
         return {
             "summary": {
-                "total": len(official) + len(user),
+                "total": len(official) + len(grounding) + len(user),
                 "official": len(official),
+                "grounding_sources": len(grounding),
+                "synthetic_fixtures": sum(
+                    item["origin"] == "SYNTHETIC_FIXTURE" for item in grounding
+                ),
                 "user_uploaded": len(user),
-                "indexed": len(official) + sum(item["status"] == "INDEXED" for item in user),
+                "indexed": len(official)
+                + len(grounding)
+                + sum(item["status"] == "INDEXED" for item in user),
                 "failed": sum(item["status"] == "FAILED" for item in user),
                 "recent_updated": max(
                     (str(item.get("updated_at") or "") for item in user),
@@ -369,7 +367,7 @@ class ProductRuntime:
                 ),
                 **counts,
             },
-            "documents": [*user, *official[:100]],
+            "documents": [*user, *grounding, *official[:100]],
             "official_list_truncated": len(official) > 100,
         }
 
@@ -380,6 +378,15 @@ class ProductRuntime:
             (item for item in _official_documents(self.project_root) if item["doc_id"] == doc_id),
             None,
         )
+        if item is None:
+            item = next(
+                (
+                    item
+                    for item in _grounding_documents(self.source_metadata)
+                    if item["doc_id"] == doc_id
+                ),
+                None,
+            )
         if item is None:
             raise KeyError(doc_id)
         return {
@@ -394,7 +401,10 @@ class ProductRuntime:
 
     def metrics(self) -> dict[str, Any]:
         if self.public_mode:
-            return json.loads(json.dumps(PUBLIC_METRICS))
+            path = self.project_root / "artifacts/rag_public_hardening/public_metrics.json"
+            if not path.exists():
+                raise RuntimeError("public metrics artifact is missing; run scripts/run_public_hardening_eval.py")
+            return json.loads(path.read_text(encoding="utf-8"))
         snapshot = json.loads(
             (self.project_root / "artifacts/rag_003d/final_reproducibility_snapshot.json").read_text(
                 encoding="utf-8"
@@ -434,6 +444,7 @@ def _evidence_payload(
     item: dict[str, Any],
     source_metadata: dict[str, dict[str, dict[str, Any]]],
     question: str,
+    project_root: Path,
 ) -> dict[str, Any]:
     metadata = item.get("metadata") or {}
     doc_id = str(item.get("doc_id") or "")
@@ -443,11 +454,36 @@ def _evidence_payload(
     source_title = item.get("source_title")
     if not source_title or source_title == doc_id:
         source_title = document.get("source_title") or source_title or doc_id
+    provenance_kind = _provenance_kind(
+        doc_id,
+        str(source_title or ""),
+        str(item.get("source_url") or document.get("source_url") or ""),
+        metadata.get("provenance_kind") or document.get("provenance_kind"),
+    )
+    source_url = item.get("source_url") or document.get("source_url")
+    source_url_status = "EXTERNAL_SOURCE_PAGE"
+    if not source_url or "example.local" in str(source_url):
+        source_url = f"/documents/{doc_id}"
+        source_url_status = (
+            "INTERNAL_SYNTHETIC_FIXTURE_DETAIL"
+            if provenance_kind == "SYNTHETIC_FIXTURE"
+            else "INTERNAL_DOCUMENT_DETAIL"
+        )
+    local_path = _portable_local_path(
+        item.get("local_path") or document.get("local_path"),
+        project_root,
+    )
     return {
         "doc_id": item.get("doc_id"),
         "source_title": source_title,
         "issuer": metadata.get("issuer") or document.get("issuer"),
         "publish_date": metadata.get("publish_date") or document.get("publish_date"),
+        "source_url": source_url,
+        "source_url_status": source_url_status,
+        "local_path": local_path,
+        "local_path_status": "VERIFIED_EXISTS" if local_path and (project_root / local_path).exists() else "NOT_PACKAGED",
+        "provenance_kind": provenance_kind,
+        "provenance_note": _provenance_note(provenance_kind),
         "chapter": item.get("chapter") or locator.get("chapter"),
         "clause": item.get("clause") or locator.get("clause"),
         "sheet_name": item.get("sheet_name"),
@@ -502,6 +538,12 @@ def _source_metadata_lookup(records: list[dict[str, Any]]) -> dict[str, dict[str
         if title_path and not document.get("source_title"):
             document["source_title"] = str(title_path[0])
         metadata = row.get("metadata") or {}
+        document.setdefault("source_url", row.get("source_url"))
+        document.setdefault("local_path", row.get("local_path"))
+        document.setdefault("issuer", metadata.get("issuer"))
+        document.setdefault("publish_date", metadata.get("publish_date"))
+        document.setdefault("provenance_kind", metadata.get("provenance_kind"))
+        document["record_count"] = int(document.get("record_count") or 0) + 1
         if not document.get("source_title") and metadata.get("source_file_name"):
             document["source_title"] = Path(str(metadata["source_file_name"])).stem
         text = str(row.get("text") or "")
@@ -526,11 +568,13 @@ def _merge_official_source_metadata(
     for item in _official_documents(project):
         document = documents.setdefault(str(item["doc_id"]), {})
         document["source_title"] = str(item["title"])
+        document["local_path"] = item.get("local_path")
+        document["provenance_kind"] = "OFFICIAL_MANIFEST_SOURCE"
 
 
 def _official_documents(project: Path) -> list[dict[str, Any]]:
     path = project / "data/official_benchmark/full500_semantic_v2.sqlite"
-    manifest_titles = _manifest_source_titles(project)
+    manifest_rows = _manifest_source_rows(project)
     connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     try:
         rows = connection.execute(
@@ -541,26 +585,122 @@ def _official_documents(project: Path) -> list[dict[str, Any]]:
     return [
         {
             "doc_id": doc_id,
-            "title": manifest_titles.get(str(doc_id)) or title or doc_id,
-            "filename": manifest_titles.get(str(doc_id)) or title or doc_id,
+            "title": (manifest_rows.get(str(doc_id)) or {}).get("title") or title or doc_id,
+            "filename": (manifest_rows.get(str(doc_id)) or {}).get("title") or title or doc_id,
             "file_type": _normalized_file_type(source_type),
             "origin": "OFFICIAL",
             "status": "INDEXED",
+            "local_path": (manifest_rows.get(str(doc_id)) or {}).get("local_path"),
+            "source_url": f"/documents/{doc_id}",
+            "source_url_status": "INTERNAL_DOCUMENT_DETAIL",
+            "provenance_kind": "OFFICIAL_MANIFEST_SOURCE",
         }
         for doc_id, source_type, title in rows
     ]
 
 
-def _manifest_source_titles(project: Path) -> dict[str, str]:
+def _manifest_source_rows(project: Path) -> dict[str, dict[str, str]]:
     path = project / "docs/unseen_100_manifest_v2.csv"
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return {
-            str(row["doc_id"]): Path(str(row["path"])).name
+            str(row["doc_id"]): {
+                "title": Path(str(row["path"])).name,
+                "local_path": _portable_local_path(row["path"], project) or "",
+            }
             for row in csv.DictReader(handle)
             if row.get("doc_id") and row.get("path")
         }
+
+
+def _grounding_documents(
+    source_metadata: dict[str, dict[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for doc_id, document in sorted(source_metadata["documents"].items()):
+        if doc_id.startswith(("official_", "user_")):
+            continue
+        provenance_kind = _provenance_kind(
+            doc_id,
+            str(document.get("source_title") or ""),
+            str(document.get("source_url") or ""),
+            document.get("provenance_kind"),
+        )
+        output.append(
+            {
+                "doc_id": doc_id,
+                "title": document.get("source_title") or doc_id,
+                "filename": Path(str(document.get("local_path") or doc_id)).name,
+                "file_type": Path(str(document.get("local_path") or "")).suffix.lstrip(".") or "text",
+                "origin": provenance_kind,
+                "status": "INDEXED",
+                "source_url": (
+                    f"/documents/{doc_id}"
+                    if "example.local" in str(document.get("source_url") or "")
+                    else document.get("source_url") or f"/documents/{doc_id}"
+                ),
+                "local_path": str(document.get("local_path") or "").replace("\\", "/"),
+                "issuer": document.get("issuer"),
+                "publish_date": document.get("publish_date"),
+                "provenance_kind": provenance_kind,
+                "provenance_note": _provenance_note(provenance_kind),
+                "record_count": document.get("record_count"),
+            }
+        )
+    return output
+
+
+def _portable_local_path(value: Any, project: Path) -> str | None:
+    if not value:
+        return None
+    path = Path(str(value))
+    if path.is_absolute():
+        try:
+            return path.resolve().relative_to(project.resolve()).as_posix()
+        except ValueError:
+            return path.name
+    return str(value).replace("\\", "/")
+
+
+def _provenance_kind(
+    doc_id: str,
+    source_title: str,
+    source_url: str,
+    declared: Any,
+) -> str:
+    if declared:
+        return str(declared)
+    if doc_id.startswith("derived_"):
+        return "DERIVED_CALCULATION"
+    if "example.local" in source_url or "虚拟" in source_title or "南江银行" in source_title:
+        return "SYNTHETIC_FIXTURE"
+    if doc_id.startswith("official_"):
+        return "OFFICIAL_MANIFEST_SOURCE"
+    if source_url.startswith("https://"):
+        return "OFFICIAL_PUBLIC_SOURCE"
+    if doc_id.startswith("user_"):
+        return "USER_UPLOADED"
+    return "UNDECLARED_SOURCE"
+
+
+def _provenance_note(kind: str) -> str:
+    return {
+        "SYNTHETIC_FIXTURE": "合成测试夹具，仅用于能力演示，不是官方监管文件。",
+        "OFFICIAL_PUBLIC_SOURCE": "来自可公开核验的官方来源页面。",
+        "OFFICIAL_MANIFEST_SOURCE": "来自500份官方附件清单；来源页未随本地附件清单提供。",
+        "USER_UPLOADED": "用户上传并在当前隔离运行中解析。",
+        "DERIVED_CALCULATION": "由已列明证据通过确定性计算生成，不对应独立源文件。",
+    }.get(kind, "来源类型尚未声明，请核验本地文件。")
+
+
+def _provenance_summary(evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    kinds = sorted({str(item.get("provenance_kind") or "UNDECLARED_SOURCE") for item in evidence})
+    return {
+        "kinds": kinds,
+        "contains_synthetic_fixture": "SYNTHETIC_FIXTURE" in kinds,
+        "all_sources_declared": "UNDECLARED_SOURCE" not in kinds,
+    }
 
 
 def _normalized_file_type(value: str | None) -> str:
@@ -596,8 +736,12 @@ def _safe_value(value: Any) -> Any:
 def _git_commit(project: Path) -> str:
     import subprocess
 
+    for name in ("RENDER_GIT_COMMIT", "DEPLOY_GIT_COMMIT", "GITHUB_SHA"):
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
     completed = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "rev-parse", "HEAD"],
         cwd=project,
         capture_output=True,
         text=True,

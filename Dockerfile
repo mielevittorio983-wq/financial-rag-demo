@@ -19,11 +19,14 @@ COPY src/ src/
 COPY configs/shadow_router_v1.yaml configs/shadow_router_v1.yaml
 COPY configs/system/public_demo.yaml configs/system/public_demo.yaml
 COPY data/synthetic/records.jsonl data/synthetic/records.jsonl
+COPY data/public_reference/ data/public_reference/
 COPY data/official_benchmark/full500_semantic_v2.sqlite data/official_benchmark/full500_semantic_v2.sqlite
 COPY data/public_demo/new_document_demo.docx data/public_demo/new_document_demo.docx
 COPY data/demo_sources/ data/demo_sources/
+COPY public_sources/ public_sources/
 COPY artifacts/rag_002a/document_family_catalog.csv artifacts/rag_002a/document_family_catalog.csv
 COPY artifacts/rag_002a/table_template_catalog.csv artifacts/rag_002a/table_template_catalog.csv
+COPY artifacts/rag_public_hardening/public_metrics.json artifacts/rag_public_hardening/public_metrics.json
 COPY start.sh start.sh
 
 RUN chmod +x /app/start.sh \

@@ -16,6 +16,8 @@
 - Root：`/`（307 跳转到 `/?demo=1`）
 - Health：`/health`
 
+`/health.git_commit` 返回 Render 注入的完整 `RENDER_GIT_COMMIT`，用于确认公网实例与部署仓库 commit 一致。
+
 服务监听 `0.0.0.0`，优先使用 Render 注入的 `PORT`，本地缺省端口为 `7860`。
 
 ## Local equivalent test
