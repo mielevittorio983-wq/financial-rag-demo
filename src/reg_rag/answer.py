@@ -262,7 +262,7 @@ def _answer_type_compatible(question: str, answer: str, evidence_texts: list[str
     if asks_amount and not _contains_money(support):
         return False
     if asks_duration and not re.search(
-        r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千万两]+)\s*(?:个?工作日|日|天|个月|月|年)",
+        r"(?:(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千万两]+)\s*(?:个?工作日|日|天|个月|月|年)|(?:至少)?每(?:季度|年|月|日)(?:开展|进行)?一次)",
         support,
     ):
         return False
@@ -1069,8 +1069,8 @@ def _extract_value_answer(question: str, text: str) -> str | None:
 
 
 def _extract_frequency_answer(question: str, text: str) -> str | None:
-    if "开展" in question and ("多久" in question or "一次" in question):
-        match = re.search(r"(至少每季度开展一次|每季度开展一次|至少每年开展一次|每年开展一次)", text)
+    if any(term in question for term in ("开展", "进行")) and ("多久" in question or "一次" in question):
+        match = re.search(r"((?:至少)?每(?:季度|年)(?:开展|进行)一次)", text)
         if match:
             return match.group(1)
     if ("账务核对" in question or "对账" in question) and "几个工作日" not in question:
@@ -1169,6 +1169,7 @@ def _target_metric(question: str) -> str | None:
         "涉农贷款余额",
         "平均处理天数",
         "杠杆率",
+        "拨备覆盖率",
     ]
     for metric in metrics:
         if metric in question:

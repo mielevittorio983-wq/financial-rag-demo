@@ -25,9 +25,9 @@ DEMO_PRESETS = [
     {
         "id": "regulation",
         "label": "监管条款精确查询",
-        "description": "定位制度原文、条款坐标与保存期限",
+        "description": "定位制度原文、条款坐标与测试频率",
         "mode": "reference_v1",
-        "question": "商业银行流动性压力测试记录至少保存多久？",
+        "question": "商业银行常规流动性风险压力测试至少多久进行一次？",
     },
     {
         "id": "excel",
